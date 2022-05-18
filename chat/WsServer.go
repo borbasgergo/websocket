@@ -1,12 +1,13 @@
 package chat
 
-import "log"
+import "errors"
 
 type WsServer struct {
 	Clients   map[*Client]bool
 	Register  chan *Client
 	Logout    chan *Client
 	Broadcast chan []byte
+	Rooms     map[*Room]bool
 }
 
 func NewWsServer() *WsServer {
@@ -15,6 +16,7 @@ func NewWsServer() *WsServer {
 		Register:  make(chan *Client),
 		Logout:    make(chan *Client),
 		Broadcast: make(chan []byte),
+		Rooms:     make(map[*Room]bool),
 	}
 }
 
@@ -28,7 +30,6 @@ func (ws *WsServer) Run() {
 			ws.LogoutClient(client)
 
 		case message := <-ws.Broadcast:
-			log.Println("message got")
 			ws.BroadcastMessage(message)
 		}
 	}
@@ -46,7 +47,34 @@ func (ws *WsServer) LogoutClient(client *Client) {
 
 func (ws *WsServer) BroadcastMessage(message []byte) {
 	for client := range ws.Clients {
-		log.Println(client)
 		client.Send <- message
 	}
+}
+
+func (ws *WsServer) findRoomByName(name string) *Room {
+	var foundRoom *Room
+	for room := range ws.Rooms {
+		if room.getName() == name {
+			foundRoom = room
+			return foundRoom
+		}
+	}
+
+	return foundRoom
+}
+func (ws *WsServer) findRoomById(id string) (room *Room, err error) {
+	for room := range ws.Rooms {
+		if room.getId() == id {
+			return room, nil
+		}
+	}
+	return nil, errors.New("error")
+}
+
+func (ws *WsServer) createRoom(name string, isPrivate bool) *Room {
+	room := NewRoom(name, isPrivate)
+	go room.startListening()
+	ws.Rooms[room] = true
+
+	return room
 }

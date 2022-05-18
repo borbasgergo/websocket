@@ -34,7 +34,9 @@ func WSHandler(
 
 	conn := handleUpgrade(w, r)
 
-	client := NewClient(conn, &server)
+	clientName := r.URL.Query()["name"]
+
+	client := NewClient(conn, &server, clientName[0])
 
 	go client.read()
 	go client.write()

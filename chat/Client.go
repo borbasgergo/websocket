@@ -1,15 +1,18 @@
 package chat
 
 import (
+	"encoding/json"
 	"github.com/gorilla/websocket"
 	"log"
 	"time"
 )
 
 type Client struct {
-	conn *websocket.Conn
-	ws   *WsServer
-	Send chan []byte
+	name  string
+	conn  *websocket.Conn
+	ws    *WsServer
+	Send  chan []byte
+	rooms map[*Room]bool
 }
 
 const (
@@ -26,12 +29,18 @@ const (
 	maxMessageSize = 10000
 )
 
-func NewClient(conn *websocket.Conn, ws *WsServer) *Client {
+func NewClient(conn *websocket.Conn, ws *WsServer, name string) *Client {
 	return &Client{
-		conn: conn,
-		ws:   ws,
-		Send: make(chan []byte),
+		name:  name,
+		conn:  conn,
+		ws:    ws,
+		Send:  make(chan []byte),
+		rooms: make(map[*Room]bool),
 	}
+}
+
+func (c *Client) getName() string {
+	return c.name
 }
 
 func (c *Client) read() {
@@ -48,7 +57,6 @@ func (c *Client) read() {
 
 	for {
 		_, jsonMessage, err := c.conn.ReadMessage()
-		log.Println(jsonMessage)
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("unexpected close error: %v", err)
@@ -56,9 +64,57 @@ func (c *Client) read() {
 			break
 		}
 
-		c.ws.Broadcast <- jsonMessage
+		c.handleNewMessage(jsonMessage)
 	}
 
+}
+
+func (c *Client) isInRoom(room *Room) bool {
+	for _, ok := c.rooms[room]; ok; {
+		return true
+	}
+	return false
+}
+
+func (c *Client) joinRoom(message *Message, sender *Client) {
+
+	room := c.ws.findRoomByName(message.Message)
+
+	if room == nil {
+		room = c.ws.createRoom(message.Message, sender != nil)
+	}
+
+	if sender == nil && room.Private {
+		return
+	}
+
+	if !c.isInRoom(room) {
+		c.rooms[room] = true
+		room.register <- c
+
+	}
+}
+
+func (c *Client) handleNewMessage(jsonMessage []byte) {
+
+	var message Message
+	err := json.Unmarshal(jsonMessage, &message)
+	handleError2(err)
+
+	switch message.Action {
+	case SendMessageAction:
+		rId := message.Target.getId()
+		if room, err := c.ws.findRoomById(rId); err != nil {
+			room.broadcast <- &message
+		}
+	case JoinRoomAction:
+		c.joinRoom(&message, message.Sender)
+
+	case LeaveRoomAction:
+		room, err := c.ws.findRoomById(message.Target.getId())
+		handleError2(err)
+		room.logout <- c
+	}
 }
 
 var (
@@ -71,6 +127,7 @@ func handleError2(error error) {
 		log.Println(error.Error())
 	}
 }
+
 func (c *Client) write() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
@@ -88,10 +145,8 @@ func (c *Client) write() {
 			}
 
 			w, err := c.conn.NextWriter(websocket.TextMessage)
-			if err != nil {
-				log.Println(err)
-				return
-			}
+			handleError2(err)
+
 			_, err2 := w.Write(message)
 			handleError2(err2)
 
@@ -109,6 +164,9 @@ func (c *Client) write() {
 
 func (c *Client) disconnect() {
 	c.ws.Logout <- c
+	for room := range c.rooms {
+		room.logout <- c
+	}
 	close(c.Send)
 	c.conn.Close()
 }

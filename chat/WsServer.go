@@ -1,6 +1,9 @@
 package chat
 
-import "errors"
+import (
+	"errors"
+	"log"
+)
 
 type WsServer struct {
 	Clients   map[*Client]bool
@@ -47,7 +50,7 @@ func (ws *WsServer) LogoutClient(client *Client) {
 
 func (ws *WsServer) BroadcastMessage(message []byte) {
 	for client := range ws.Clients {
-		client.Send <- message
+		client.send <- message
 	}
 }
 
@@ -73,6 +76,7 @@ func (ws *WsServer) findRoomById(id string) (room *Room, err error) {
 
 func (ws *WsServer) createRoom(name string, isPrivate bool) *Room {
 	room := NewRoom(name, isPrivate)
+	log.Println(room)
 	go room.startListening()
 	ws.Rooms[room] = true
 

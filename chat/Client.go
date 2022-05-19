@@ -8,10 +8,10 @@ import (
 )
 
 type Client struct {
-	name  string
+	Name  string `json:"name"`
 	conn  *websocket.Conn
 	ws    *WsServer
-	Send  chan []byte
+	send  chan []byte
 	rooms map[*Room]bool
 }
 
@@ -31,16 +31,16 @@ const (
 
 func NewClient(conn *websocket.Conn, ws *WsServer, name string) *Client {
 	return &Client{
-		name:  name,
+		Name:  name,
 		conn:  conn,
 		ws:    ws,
-		Send:  make(chan []byte),
+		send:  make(chan []byte),
 		rooms: make(map[*Room]bool),
 	}
 }
 
 func (c *Client) getName() string {
-	return c.name
+	return c.Name
 }
 
 func (c *Client) read() {
@@ -92,7 +92,29 @@ func (c *Client) joinRoom(message *Message, sender *Client) {
 		c.rooms[room] = true
 		room.register <- c
 
+		c.notifyRoomOnJoin(room, message)
 	}
+}
+
+func (c *Client) notifyRoomOnJoin(room *Room, message *Message) {
+
+	msg := &Message{
+		Action:  RoomJoinedAction,
+		Message: c.getName() + " joined the room!",
+		Sender:  message.Sender,
+	}
+
+	room.broadcast <- msg
+
+}
+
+func (c *Client) sendMessageAction(message *Message) {
+
+	room := c.ws.findRoomByName(message.Target)
+	if room != nil {
+		room.broadcast <- message
+	}
+
 }
 
 func (c *Client) handleNewMessage(jsonMessage []byte) {
@@ -101,19 +123,21 @@ func (c *Client) handleNewMessage(jsonMessage []byte) {
 	err := json.Unmarshal(jsonMessage, &message)
 	handleError2(err)
 
+	// attaching the client to the sender of the message
+	message.Sender = c
+
 	switch message.Action {
 	case SendMessageAction:
-		rId := message.Target.getId()
-		if room, err := c.ws.findRoomById(rId); err != nil {
-			room.broadcast <- &message
-		}
+		c.sendMessageAction(&message)
+
 	case JoinRoomAction:
 		c.joinRoom(&message, message.Sender)
 
 	case LeaveRoomAction:
-		room, err := c.ws.findRoomById(message.Target.getId())
-		handleError2(err)
-		room.logout <- c
+		room := c.ws.findRoomByName(message.Target)
+		if room != nil {
+			room.logout <- c
+		}
 	}
 }
 
@@ -136,7 +160,8 @@ func (c *Client) write() {
 	}()
 	for {
 		select {
-		case message, ok := <-c.Send:
+		case message, ok := <-c.send:
+			log.Println(message)
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				// The WsServer closed the channel.
@@ -167,6 +192,6 @@ func (c *Client) disconnect() {
 	for room := range c.rooms {
 		room.logout <- c
 	}
-	close(c.Send)
+	close(c.send)
 	c.conn.Close()
 }

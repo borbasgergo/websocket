@@ -1,10 +1,14 @@
 package chat
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+	"log"
+)
 
 const SendMessageAction = "send-message"
 const JoinRoomAction = "join-room"
 const LeaveRoomAction = "leave-room"
+const RoomJoinedAction = "joined-to-room"
 
 type Room struct {
 	Id        uuid.UUID `json:"id"`
@@ -40,6 +44,7 @@ func (room *Room) startListening() {
 		case client := <-room.logout:
 			room.logoutClient(client)
 		case message := <-room.broadcast:
+			log.Println(message)
 			room.broadcastToRoom(message.encode())
 		}
 	}
@@ -57,8 +62,9 @@ func (room *Room) logoutClient(client *Client) {
 }
 
 func (room *Room) broadcastToRoom(message []byte) {
+	log.Println(room.clients)
 	for client := range room.clients {
-		client.Send <- message
+		client.send <- message
 	}
 }
 
